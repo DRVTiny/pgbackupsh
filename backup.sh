@@ -23,11 +23,18 @@ err_ () {
  exit $?
 }
 
+which postgres &>/dev/null || {
+ err_ '"postgres" command not found, check that it is in your PATH!'
+ exit 101
+}
+
 USER_HOME=${USER_HOME-$(getent passwd $RUN_AS_USER | cut -d':' -f6)}
 source ${slf[PATH]}/backup.inc
 
-[[ -f ${BACKUP2[BASE]}/.dontbackup ]] && exit 100
-
+[[ -f ${BACKUP2[BASE]}/.dontbackup ]] && {
+ err_ 'Backups is prohibited by administrator'
+ exit 100
+}
 
 case "$WHAT2DO" in
 base)  
@@ -37,7 +44,7 @@ base)
   INCRBAK_DIR="${BACKUP2[INCREMENT]}/$TS"
   
   psql <<<"SELECT pg_start_backup('$TS', true);"
-   rsync -a --exclude-from=exclude.lst 'wals' --exclude 'pg_xlog'  --exclude '*~' --exclude '.#*' --exclude 'DEADJOE' ${POSTGRES_DATA_DIR}/ ${BASEBAK_DIR} 2>/dev/null
+   rsync -a --exclude-from=exclude.lst ${POSTGRES[DATA_PATH]}/ ${BASEBAK_DIR} 2>/dev/null
   psql <<<"SELECT pg_stop_backup();"
   
   tar -cj --remove-files -f ${BASEBAK_DIR}.tbz2 ${BASEBAK_DIR} $([[ -d $INCRBAK_DIR ]] && echo -n $INCRBAK_DIR) && \
