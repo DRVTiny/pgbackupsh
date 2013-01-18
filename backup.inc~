@@ -1,9 +1,11 @@
-declare -A BACKUP2
-POSTGRES_VER=$(postgres -V | cut -d'.' -f1,2 | awk '{print $NF}')
-POSTGRES_DATA_DIR="/var/lib/postgresql/$POSTGRES_VER"
-BACKUP2[BASE]="${USER_HOME:=$HOME}/backup/base/$POSTGRES_VER"
-BACKUP2[INCREMENT]=${BACKUP2[BASE]/\/base\///increment/}
+dbName='namos'
 
+POSTGRES_VER=$(postgres -V | cut -d'.' -f1,2 | awk '{print $NF}')
+srcDir=$POSTGRES_VER
+
+declare -A BACKUP2
+BACKUP2[BASE]="${USER_HOME:=$HOME}/backup/base/$srcDir"
+BACKUP2[INCREMENT]="${USER_HOME:=$HOME}/backup/increment/$srcDir"
 mkdir -p ${BACKUP2[BASE]} ${BACKUP2[INCREMENT]}
 
 getLatestBaseBakTS () {

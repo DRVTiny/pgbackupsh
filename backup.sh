@@ -1,21 +1,35 @@
 #!/bin/bash -x
-exit 0
-slf=${0##*/}
+(( ${BASH_VERSION%%.*}>=4 )) || {
+ echo 'Must be run under BASH version 4 or higher!' >&2
+ exit 1
+}
+
+declare -A slf
+slf[NAME]=${0##*/}
+slf[PATH]=$(dirname $(readlink -e "$0"))
+# What type of backup we want to do?
+WHAT2DO=${1:-base}
+
 RUN_AS_USER='postgres'
-USER_HOME="$(getent passwd postgres | cut -d':' -f6)"
+
+err_ () {
+ echo "${slf[NAME]}: ERROR: $@" >&2
+ return 0
+}
+
 [[ $(whoami) == $RUN_AS_USER ]] || {
- echo "This script must be launched with EUID=$RUN_AS_USER, trying to change EUID now..." >&2
+ err_ "This script must be launched with EUID=$RUN_AS_USER, trying to change EUID now..." >&2
  sudo -u $RUN_AS_USER $0
  exit $?
 }
-err_ () {
- echo "$slf: ERROR: $@" >&2
- return 0
-}
-source ${0%/*}/backup.inc
-# What type of backup we want to do?
-what2do=${1:-base}
-case "$what2do" in
+
+USER_HOME=${USER_HOME-$(getent passwd $RUN_AS_USER | cut -d':' -f6)}
+source ${slf[PATH]}/backup.inc
+
+[[ -f ${BACKUP2[BASE]}/.dontbackup ]] && exit 100
+
+
+case "$WHAT2DO" in
 base)  
   TS="$(date +%Y%m%d_%H%M%S)"
   
@@ -23,7 +37,7 @@ base)
   INCRBAK_DIR="${BACKUP2[INCREMENT]}/$TS"
   
   psql <<<"SELECT pg_start_backup('$TS', true);"
-   rsync -a --exclude 'wals' --exclude 'pg_xlog'  --exclude '*~' --exclude '.#*' --exclude 'DEADJOE' ${srcDir}/ $BASEBAK_DIR 2>/dev/null
+   rsync -a --exclude-from=exclude.lst 'wals' --exclude 'pg_xlog'  --exclude '*~' --exclude '.#*' --exclude 'DEADJOE' ${POSTGRES_DATA_DIR}/ ${BASEBAK_DIR} 2>/dev/null
   psql <<<"SELECT pg_stop_backup();"
   
   tar -cj --remove-files -f ${BASEBAK_DIR}.tbz2 ${BASEBAK_DIR} $([[ -d $INCRBAK_DIR ]] && echo -n $INCRBAK_DIR) && \
