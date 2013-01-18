@@ -9,22 +9,20 @@ slf[NAME]=${0##*/}
 slf[PATH]=$(dirname $(readlink -e "$0"))
 # What type of backup we want to do?
 WHAT2DO=${1:-base}
-
+LOG_FILE='/var/log/postgresql/backup.log'
+DEBUG_LEVEL=info
 RUN_AS_USER='postgres'
 
-err_ () {
- echo "${slf[NAME]}: ERROR: $@" >&2
- return 0
-}
-
+source /opt/scripts/functions/debug.func
+log_open '/var/log/postgresql/backup.log' 
 [[ $(whoami) == $RUN_AS_USER ]] || {
- err_ "This script must be launched with EUID=$RUN_AS_USER, trying to change EUID now..." >&2
+ error_ "This script must be launched with EUID=$RUN_AS_USER, trying to change EUID now..."
  sudo -u $RUN_AS_USER $0
  exit $?
 }
 
 which postgres &>/dev/null || {
- err_ '"postgres" command not found, check that it is in your PATH!'
+ error_ '"postgres" command not found, check that it is in your PATH'
  exit 101
 }
 
@@ -32,30 +30,39 @@ USER_HOME=${USER_HOME-$(getent passwd $RUN_AS_USER | cut -d':' -f6)}
 source ${slf[PATH]}/backup.inc
 
 [[ -f ${BACKUP2[BASE]}/.dontbackup ]] && {
- err_ 'Backups is prohibited by administrator'
+ error_ 'Backups is prohibited by administrator'
  exit 100
 }
 
 case "$WHAT2DO" in
 base)  
   TS="$(date +%Y%m%d_%H%M%S)"
-  
-  BASEBAK_DIR="${BACKUP2[BASE]}/$TS"
-  INCRBAK_DIR="${BACKUP2[INCREMENT]}/$TS"
+  debug_ "BackupID=Current time stamp: $TS"
+  BACKUP2[BASE]+="/$TS"
+  BACKUP2[INCREMENT]+="/$TS"
   
   psql <<<"SELECT pg_start_backup('$TS', true);"
-   rsync -a --exclude-from=exclude.lst ${POSTGRES[DATA_PATH]}/ ${BASEBAK_DIR} 2>/dev/null
-  psql <<<"SELECT pg_stop_backup();"
+   _errc="$(rsync -a --exclude-from=exclude.lst ${POSTGRES[DATA_PATH]}/ ${BACKUP2[BASE]} 2>&1 >/dev/null)"
+   (( $? )) && error_ "Some problem while RSYNC, description given: ${_errc}"
+  psql <<<'SELECT pg_stop_backup();'
   
-  tar -cj --remove-files -f ${BASEBAK_DIR}.tbz2 ${BASEBAK_DIR} $([[ -d $INCRBAK_DIR ]] && echo -n $INCRBAK_DIR) && \
-   rmdir $BASEBAK_DIR 2>/dev/null
+  info_ 'Start backup archiving...'
+  _errc=$(
+    { tar -cj --remove-files -f ${BACKUP2[BASE]}.tbz2 \
+                              ${BACKUP2[BASE]} \
+                              $([[ -d ${BACKUP2[INCREMENT]} ]] && echo -n ${BACKUP2[INCREMENT]}) && \
+      rmdir ${BACKUP2[BASE]}; } 2>&1 >/dev/null
+         )
+  (( $? )) && error_ "Some error occured while archiving backup: ${_errc}"
    
 ;;
-save_xlog)
- [[ $2 && -f $2 && -r $2 ]] || { err_ 'You must specify file to copy'; exit 1; }
- TIMESTAMP=$(getLatestBaseBakTS)
- DEST_DIR="${BACKUP2[INCREMENT]}/${TIMESTAMP:-00000000_000000}"
- mkdir -p $DEST_DIR
- cp "$2"  $DEST_DIR
+save_xlog)  
+  [[ $2 && -f $2 && -r $2 ]] || { error_ 'You must specify file to copy and it must be readable'; exit 1; }
+  info_ "We requested to copy/save $2"
+  TIMESTAMP=$(getLatestBaseBakTS)
+  info_ "Base  backup timestamp (00000000_000000 if base backups is absent): ${TIMESTAMP:-00000000_000000}"
+  DEST_DIR="${BACKUP2[INCREMENT]}/${TIMESTAMP:-00000000_000000}"
+  mkdir -p $DEST_DIR
+  cp "$2"  $DEST_DIR
 ;;
 esac
