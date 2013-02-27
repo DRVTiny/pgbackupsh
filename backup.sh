@@ -1,4 +1,4 @@
-#!/bin/bash -x
+#!/bin/bash
 (( ${BASH_VERSION%%.*}>=4 )) || {
  echo 'Must be run under BASH version 4 or higher!' >&2
  exit 1
@@ -38,31 +38,57 @@ case "$WHAT2DO" in
 base)  
   TS="$(date +%Y%m%d_%H%M%S)"
   debug_ "BackupID=Current time stamp: $TS"
+  rm -rf ${BACKUP2[BASE]}/* ${BACKUP2[INCREMENT]}/*
   BACKUP2[BASE]+="/$TS"
   BACKUP2[INCREMENT]+="/$TS"
-  
-  psql <<<"SELECT pg_start_backup('$TS', true);"
-   _errc="$(rsync -a --exclude-from=exclude.lst ${POSTGRES[DATA_PATH]}/ ${BACKUP2[BASE]} 2>&1 >/dev/null)"
-   (( $? )) && error_ "Some problem while RSYNC, description given: ${_errc}"
-  psql <<<'SELECT pg_stop_backup();'
-  
-  info_ 'Start backup archiving...'
-  _errc=$(
-    { tar -cj --remove-files -f ${BACKUP2[BASE]}.tbz2 \
-                              ${BACKUP2[BASE]} \
-                              $([[ -d ${BACKUP2[INCREMENT]} ]] && echo -n ${BACKUP2[INCREMENT]}) && \
-      rmdir ${BACKUP2[BASE]}; } 2>&1 >/dev/null
-         )
-  (( $? )) && error_ "Some error occured while archiving backup: ${_errc}"
+  case ${BACKUP_METHOD[BASE]} in
+  pg_basebackup)
+   which pg_basebackup &>/dev/null || {
+    error_ 'pg_basebackup command not found, check your PATH'
+    exit 213
+   }
+   pg_basebackup -D ${BACKUP2[BASE]} -Ft -P -Z9 -x -l "$TS"
+  ;;
+  rsync)
+   psql <<<"SELECT pg_start_backup('$TS', true);"
+    _errc="$(rsync -a --exclude-from=${slf[PATH]}/exclude.lst ${POSTGRES[DATA_PATH]}/ ${BACKUP2[BASE]} 2>&1 >/dev/null)"
+    (( $? )) && error_ "Some problem while RSYNC, description given: ${_errc}"
+   psql <<<'SELECT pg_stop_backup();'
    
+   info_ 'Start backup archiving...'
+   _errc=$(
+     { tar -cj --remove-files -f ${BACKUP2[BASE]}.tbz2 \
+                               ${BACKUP2[BASE]} \
+                               $([[ -d ${BACKUP2[INCREMENT]} ]] && echo -n ${BACKUP2[INCREMENT]}) && \
+       rmdir ${BACKUP2[BASE]}; } 2>&1 >/dev/null
+          )
+   (( $? )) && error_ "Some error occured while archiving backup: ${_errc}"   
+  ;;
+  *) 
+   error_ 'Unknown backup method specified, see backup.inc'
+   exit 212
+  ;;
+  esac
 ;;
-save_xlog)  
-  [[ $2 && -f $2 && -r $2 ]] || { error_ 'You must specify file to copy and it must be readable'; exit 1; }
-  info_ "We requested to copy/save $2"
-  TIMESTAMP=$(getLatestBaseBakTS)
-  info_ "Base  backup timestamp (00000000_000000 if base backups is absent): ${TIMESTAMP:-00000000_000000}"
-  DEST_DIR="${BACKUP2[INCREMENT]}/${TIMESTAMP:-00000000_000000}"
-  mkdir -p $DEST_DIR
-  cp "$2"  $DEST_DIR
+save_xlog)
+  walsFile="$2"
+  [[ $walsFile && -f $walsFile && -r $walsFile ]] || \
+   { error_ 'You must specify file to copy and it must be readable'; exit 1; }
+  info_ "We requested to copy/save $walsFile"
+  case ${BACKUP_METHOD[INCREMENT],,} in
+  'local')
+    TIMESTAMP=$(getLatestBaseBakTS)
+    if [[ $TIMESTAMP ]]; then
+     info_ "Base  backup timestamp: $TIMESTAMP"
+     DEST_DIR="${BACKUP2[INCREMENT]}/$TIMESTAMP"
+     mkdir -p $DEST_DIR
+     cp "$2"  $DEST_DIR   
+    fi
+   ;;
+  'remote')
+#    scp -q $walsFile ${REMOTE[USER]}@${REMOTE[HOST]}:${REMOTE[PATH]}
+    rsync -a $walsFile ${REMOTE[USER]}@${REMOTE[HOST]}:${REMOTE[PATH]}
+   ;;
+  esac  
 ;;
 esac

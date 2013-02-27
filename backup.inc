@@ -5,6 +5,17 @@ POSTGRES[DATA_PATH]="/var/lib/postgresql/${POSTGRES[VERSION]}"
 BACKUP2[BASE]="${USER_HOME:=$HOME}/backup/base/${POSTGRES[VERSION]}"
 BACKUP2[INCREMENT]=${BACKUP2[BASE]/\/base\///increment/}
 
+declare -A BACKUP_METHOD=(
+	[BASE]='pg_basebackup'
+	[INCREMENT]='remote'
+)
+
+declare -A REMOTE=(
+	[USER]='barman'
+	[HOST]='backup.namos.local'
+	[PATH]='/var/lib/barman/devpg/incoming'
+)
+
 mkdir -p ${BACKUP2[BASE]} ${BACKUP2[INCREMENT]}
 
 getLatestBaseBakTS () {
