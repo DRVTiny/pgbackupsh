@@ -1,7 +1,7 @@
 declare -A BACKUP2 POSTGRES
 
 POSTGRES[VERSION]=$(postgres -V | cut -d'.' -f1,2 | awk '{print $NF}')
-POSTGRES[DATA_PATH]="/var/lib/postgresql/${POSTGRES[VERSION]}"
+POSTGRES[DATA_PATH]=${PGDATA-/var/lib/postgresql/${POSTGRES[VERSION]}}
 BACKUP2[BASE]="${USER_HOME:=$HOME}/backup/base/${POSTGRES[VERSION]}"
 BACKUP2[INCREMENT]=${BACKUP2[BASE]/\/base\///increment/}
 
