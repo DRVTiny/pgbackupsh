@@ -13,7 +13,7 @@ declare -A BACKUP_METHOD=(
 declare -A REMOTE=(
 	[USER]='barman'
 	[HOST]='backup.namos.local'
-	[PATH]='/var/lib/barman/devpg/incoming'
+	[PATH]="/var/lib/barman/$(hostname)/incoming"
 )
 
 mkdir -p ${BACKUP2[BASE]} ${BACKUP2[INCREMENT]}
