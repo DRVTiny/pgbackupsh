@@ -34,6 +34,11 @@ source ${slf[PATH]}/backup.inc
  exit 100
 }
 
+if [[ -f ${POSTGRES[CONF]} ]]; then
+ error_ "PostgreSQL data path (${POSTGRES[DATA_PATH]}) doesnt contain postgresql.conf, therefore seems to be invalid"
+ exit 105
+fi
+
 case "$WHAT2DO" in
 base)  
   TS="$(date +%Y%m%d_%H%M%S)"
@@ -47,7 +52,20 @@ base)
     error_ 'pg_basebackup command not found, check your PATH'
     exit 213
    }
-   pg_basebackup -D ${BACKUP2[BASE]} -Ft -P -Z9 -x -l "$TS"
+   max_wal_senders=$(sed -nr 's%^\s*max_wal_senders\s*=\s*([0-9]+)\s*(#.*)?$%\1%p' "${POSTGRES[CONF]}")
+   if ! (( ${max_wal_senders-0} >= WAL_SENDERS[MIN] )); then
+    if ! [[ -w ${POSTGRES[CONF]} ]]; then
+     error_ "PostgreSQL config file (${POSTGRES[CONF]}) is not writeable but we need to modify it because max_wal_senders must be >=${WAL_SENDERS[MIN]}"
+     exit 106
+    fi    
+    if [[ $max_wal_senders ]]; then
+     (( max_wal_senders < WAL_SENDERS[MIN] )) && \
+      sed -ri "s%^(\s*max_wal_senders\s*=\s*)${max_wal_senders}(\s*(#.*)?)$%\1${WAL_SENDERS[DESIRED]}\2%p" "${POSTGRES[CONF]}"
+    else
+     echo "max_wal_senders = ${WAL_SENDERS[DESIRED]}" >> "${POSTGRES[CONF]}"
+    fi
+   fi
+   pg_basebackup -D ${BACKUP2[BASE]} -Ft -P -Z9 -x -l "$TS" --xlog-method=stream
   ;;
   rsync)
    psql <<<"SELECT pg_start_backup('$TS', true);"

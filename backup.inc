@@ -1,9 +1,18 @@
-declare -A BACKUP2 POSTGRES
-
-POSTGRES[VERSION]=$(postgres -V | cut -d'.' -f1,2 | awk '{print $NF}')
+declare -A POSTGRES=(
+	[VERSION]=$(postgres -V | cut -d'.' -f1,2 | awk '{print $NF}')
+)
 POSTGRES[DATA_PATH]=${PGDATA-/var/lib/postgresql/${POSTGRES[VERSION]}}
-BACKUP2[BASE]="${USER_HOME:=$HOME}/backup/base/${POSTGRES[VERSION]}"
+POSTGRES[CONF]="${POSTGRES[DATA_PATH]}/postgresql.conf"
+
+declare -A BACKUP2=(
+	[BASE]="${USER_HOME:=$HOME}/backup/base/${POSTGRES[VERSION]}"
+)
 BACKUP2[INCREMENT]=${BACKUP2[BASE]/\/base\///increment/}
+
+declare -A WAL_SENDERS=(
+	[MIN]=2
+	[DESIRED]=10
+)
 
 declare -A BACKUP_METHOD=(
 	[BASE]='pg_basebackup'
