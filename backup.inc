@@ -9,6 +9,10 @@ declare -A BACKUP2=(
 )
 BACKUP2[INCREMENT]=${BACKUP2[BASE]/\/base\///increment/}
 
+#declare -A BACKUP_FROM=(
+#	[HOST]='somehost.domain.tld'
+#)
+
 declare -A WAL_SENDERS=(
 	[MIN]=2
 	[DESIRED]=10

@@ -4,9 +4,11 @@
  exit 1
 }
 
-declare -A slf
-slf[NAME]=${0##*/}
-slf[PATH]=$(dirname $(readlink -e "$0"))
+declare -A slf=(
+	[NAME]=${0##*/}
+	[PATH]=$(dirname $(readlink -e "$0"))
+)
+
 # What type of backup we want to do?
 WHAT2DO=${1:-base}
 LOG_FILE='/var/log/postgresql/backup.log'
@@ -27,7 +29,12 @@ which postgres &>/dev/null || {
 }
 
 USER_HOME=${USER_HOME-$(getent passwd $RUN_AS_USER | cut -d':' -f6)}
-source ${slf[PATH]}/backup.inc
+
+if [[ -f $USER_HOME/.pg_backup ]]; then
+ source ${USER_HOME}/.pg_backup
+else
+ source ${slf[PATH]}/backup.inc
+fi
 
 [[ -f ${BACKUP2[BASE]}/.dontbackup ]] && {
  error_ 'Backups is prohibited by administrator'
@@ -68,19 +75,20 @@ base)
    pg_basebackup -D ${BACKUP2[BASE]} -Ft -P -Z9 -x -l "$TS" --xlog-method=stream
   ;;
   rsync)
-   psql <<<"SELECT pg_start_backup('$TS', true);"
-    _errc="$(rsync -a --exclude-from=${slf[PATH]}/exclude.lst ${POSTGRES[DATA_PATH]}/ ${BACKUP2[BASE]} 2>&1 >/dev/null)"
+   eval "echo \"SELECT pg_start_backup('$TS', true);\" | ${BACKUP_FROM[HOST]+ssh ${BACKUP_FROM[HOST]} }psql;"
+    _errc="$(rsync -a --exclude-from=${slf[PATH]}/exclude.lst ${BACKUP_FROM[HOST]+${BACKUP_FROM[HOST]}:}${POSTGRES[DATA_PATH]}/ ${BACKUP2[BASE]} 2>&1 >/dev/null)"
     (( $? )) && error_ "Some problem while RSYNC, description given: ${_errc}"
-   psql <<<'SELECT pg_stop_backup();'
-   
-   info_ 'Start backup archiving...'
-   _errc=$(
+   eval "echo \"SELECT pg_stop_backup();\" | ${BACKUP_FROM[HOST]+ssh ${BACKUP_FROM[HOST]} }psql;"
+   if [[ ${BACKUP2[ARCHIVE]} ]]; then
+    info_ 'Start backup archiving...'
+    _errc=$(
      { tar -cj --remove-files -f ${BACKUP2[BASE]}.tbz2 \
                                ${BACKUP2[BASE]} \
                                $([[ -d ${BACKUP2[INCREMENT]} ]] && echo -n ${BACKUP2[INCREMENT]}) && \
        rmdir ${BACKUP2[BASE]}; } 2>&1 >/dev/null
           )
-   (( $? )) && error_ "Some error occured while archiving backup: ${_errc}"   
+    (( $? )) && error_ "Some error occured while archiving backup: ${_errc}"
+   fi   
   ;;
   *) 
    error_ 'Unknown backup method specified, see backup.inc'
