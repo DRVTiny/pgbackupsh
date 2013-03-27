@@ -34,8 +34,8 @@ source ${slf[PATH]}/backup.inc
  exit 100
 }
 
-if [[ -f ${POSTGRES[CONF]} ]]; then
- error_ "PostgreSQL data path (${POSTGRES[DATA_PATH]}) doesnt contain postgresql.conf, therefore seems to be invalid"
+if ! [[ -f ${POSTGRES[CONF]} ]]; then
+ error_ "PostgreSQL data path (${POSTGRES[DATA_PATH]}) doesnt contain ${POSTGRES[CONF]##*/}, therefore seems to be invalid"
  exit 105
 fi
 
