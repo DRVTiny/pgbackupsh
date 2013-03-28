@@ -42,7 +42,7 @@ base)
  fi 
  TS="$(date +%Y%m%d_%H%M%S)"
  info_ "We requested to get base copy from $RemoteHost, BackupID: $TS"
- OurDestPath="${INIbase[path]}/$RemoteHost/base/$TS"
+ OurDestPath="${INIserver[backup_path]}/$RemoteHost/base/$TS"
  mkdir -p "$OurDestPath"
  info_ "We was requested to get base copy from $RemoteHost, $Dir2Copy. We are going to place this copy in $OurDestPath"
  ssh $User@$RemoteHost "psql <<<\"SELECT pg_start_backup('$TS', true);\""
