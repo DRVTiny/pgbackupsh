@@ -9,6 +9,14 @@ declare -A slf=(
 	[PATH]=$(dirname $(readlink -e "$0"))
 )
 
+while getopts 'T' k; do
+ case $k in
+ T) flTestOut='| cat -' ;;
+ *) : ;;
+ esac
+done
+shift $((OPTIND-1))
+
 WHAT2DO=${1:-base}
 LOG_FILE='/var/log/postgresql/backup.log'
 DEBUG_LEVEL=info
@@ -43,16 +51,17 @@ base)
  TS="$(date +%Y%m%d_%H%M%S)"
  info_ "We requested to get base copy from $RemoteHost, BackupID: $TS"
  OurDestPath="${INIserver[backup_path]}/$RemoteHost/base/$TS"
- mkdir -p "$OurDestPath"
+ ${flTestOut+echo }mkdir -p "$OurDestPath"
  info_ "We was requested to get base copy from $RemoteHost, $Dir2Copy. We are going to place this copy in $OurDestPath"
- ssh $User@$RemoteHost "psql <<<\"SELECT pg_start_backup('$TS', true);\""
- _errc="$(rsync -a --exclude-from=${OurConfig%/*}/exclude.lst $User@$RemoteHost:${Dir2Copy%/}/ $OurDestPath 2>&1 >/dev/null)"
+ ${flTestOut+echo }ssh $User@$RemoteHost "psql <<<\"SELECT pg_start_backup('$TS', true);\""
+ _errc="$(${flTestOut+echo }rsync -a --exclude-from=${OurConfig%/*}/exclude.lst $User@$RemoteHost:${Dir2Copy%/}/ $OurDestPath 2>&1 >/dev/null)"
  (( $? )) && error_ "Some problem while RSYNC, description given: ${_errc}"
- ssh $User@$RemoteHost "psql <<<'SELECT pg_stop_backup();'" 
-  eval "LoginAs=\${INI$RemoteHost[login_to_server]}"
- cat <<EOF>$OurDestPath/recovery.conf
-restore_command = 'scp ${HOSTNAME}'
+ ${flTestOut+echo }ssh $User@$RemoteHost "psql <<<'SELECT pg_stop_backup();'" 
+  eval "LoginAs=\${INI$RemoteHost[login_to_server]-$(whoami)}"
+ eval "cat <<EOF ${flTestOut->$OurDestPath/recovery.conf}
+restore_command = 'scp ${LoginAs}@${INIserver[hostname]}:${INIserver[backup_path]}/$RemoteHost/wals/%f %p'
 EOF
+"
 ;;
 save_xlog)
  walsFile="$2"
