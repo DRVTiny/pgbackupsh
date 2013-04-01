@@ -1,4 +1,4 @@
-#!/bin/bash -x
+#!/bin/bash
 (( ${BASH_VERSION%%.*}>=4 )) || {
  echo 'Must be run under BASH version 4 or higher!' >&2
  exit 1
@@ -9,10 +9,12 @@ declare -A slf=(
 	[PATH]=$(dirname $(readlink -e "$0"))
 )
 
-while getopts 'T' k; do
+while getopts 'TDR' k; do
  case $k in
- T) flTestOut='| cat -' ;;
- *) : ;;
+  T) flTestOut='| cat -' ;;
+  D) set -x 		 ;;
+  R) flReplicaMode=1 	 ;;
+  *) : 			 ;;
  esac
 done
 shift $((OPTIND-1))
@@ -38,7 +40,9 @@ if [[ -d ${OurConfig%/*}/clients ]]; then
   eval "$(read_ini $f)"  
  done < <(find ${OurConfig%/*}/clients -type f -name '*.ini')
 fi
- 
+
+source "${slf[PATH]}/${slf[NAME]%.*}.inc"
+
 case $WHAT2DO in
 base)
  [[ $2 ]] || { error_ 'We dont know, from where and what to copy'; exit 1; }
@@ -58,10 +62,20 @@ base)
  (( $? )) && error_ "Some problem while RSYNC, description given: ${_errc}"
  ${flTestOut+echo }ssh $User@$RemoteHost "psql <<<'SELECT pg_stop_backup();'" 
   eval "LoginAs=\${INI$RemoteHost[login_to_server]-$(whoami)}"
- eval "cat <<EOF ${flTestOut->$OurDestPath/recovery.conf}
+  if [[ $flReplicaMode ]]; then
+   eval "cat <<EOF ${flTestOut->$OurDestPath/recovery.conf}
+standby_mode = 'on'
+trigger_file = '/tmp/postgresql.trigger.5432'
 restore_command = 'scp ${LoginAs}@${INIserver[hostname]}:${INIserver[backup_path]}/$RemoteHost/wals/%f %p'
+archive_cleanup_command = '${INIserver[archive_cleanup_command]-/opt/PostgreSQL/current/bin/pg_archivecleanup} ${INIserver[backup_path]}/$RemoteHost/wals %r'
 EOF
 "
+  else
+   eval "cat <<EOF ${flTestOut->$OurDestPath/recovery.conf}
+restore_command = 'scp ${LoginAs}@${INIserver[hostname]}:${INIserver[backup_path]}/$RemoteHost/wals/%f %p'
+EOF
+"   
+  fi
 ;;
 save_xlog)
  walsFile="$2"
@@ -71,6 +85,32 @@ save_xlog)
  eval "LoginAs=\${INI$HOSTNAME[login_to_server]}"
  ssh ${LoginAs=postgres}@${INIserver[hostname]} "mkdir -p ${INIserver[backup_path]}/$HOSTNAME/wals/"
  rsync -a "$walsFile" $LoginAs@${INIserver[hostname]}:${INIserver[backup_path]}/$HOSTNAME/wals/
+;;
+rotate)
+ RemoteHost="$2"
+ eval "nBaseBaks2Keep=\${INI$RemoteHost[n_base_backups]:-2}"
+ lstBaseBackups=($(ls "${INIserver[backup_path]}/$RemoteHost/base" | sed -nr '/^[0-9]{8}_[0-9]{6}$/p' | sort -rn))
+ if (( ${#lstBaseBackups[@]}>nBaseBaks2Keep )); then
+  errc=0
+  for ((i=nBaseBaks2Keep; i<${#lstBaseBackups[@]}; i++)); do
+   bb=${lstBaseBackups[$i]}
+   doCleanWALs "${INIserver[backup_path]}/$RemoteHost/base/$bb/backup_label" -n &>/dev/null
+   (( errc+=$? ))
+  done
+  (( errc )) || {
+   pushd "$(pwd)" &>/dev/null
+   cd "${INIserver[backup_path]}/$RemoteHost/base"
+   rm -rf ${lstBaseBackups[@]:$nBaseBaks2Keep}
+   popd &>/dev/null
+   doCleanWALs "${INIserver[backup_path]}/$RemoteHost/base/${lstBaseBackups[$((nBaseBaks2Keep-1))]}/backup_label" 2>/dev/null
+  }
+ fi
+# $0 tail_clean
+;;
+tail_clean)
+ RemoteHost="$2"
+ bb=$(ls "${INIserver[backup_path]}/$RemoteHost/base" | sed -nr '/^[0-9]{8}_[0-9]{6}$/p' | sort -n | head -1)
+ [[ $bb ]] && doCleanWALs "${INIserver[backup_path]}/$RemoteHost/base/$bb/backup_label"
 ;;
 *)
  info_ "Sorry, operation \"$WHAT2DO\" N.I.Y"
