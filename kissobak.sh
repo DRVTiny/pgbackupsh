@@ -69,13 +69,13 @@ base)
  info_ "We was requested to get base copy from $RemoteHost, $Dir2Copy. We are going to place this copy in $OurDestPath"
  trap 'pg_backup stop' SIGINT SIGTERM SIGHUP
  pg_backup start || {
-  error_ "Coudnot start backup on $RemoteHost. Error=${ERR_MSG}"
+  error_ "Coudnot start backup on $RemoteHost. Error=${STDERR}"
   exit 1
  }
  _errc="$(${flTestOut+echo }rsync -a --exclude-from=${OurConfig%/*}/exclude.lst $User@$RemoteHost:${Dir2Copy%/}/ $OurDestPath 2>&1 >/dev/null)"
  (( $? )) && error_ "Some problem while RSYNC, description given: ${_errc}"
  pg_backup stop || {
-  error_ "Some problem occured while stopping backup on $RemoteHost. Error=${ERR_MSG}"
+  error_ "Some problem occured while stopping backup on $RemoteHost. Error=${STDERR}"
   exit 1
  }
  trap "" SIGINT SIGTERM SIGHUP
