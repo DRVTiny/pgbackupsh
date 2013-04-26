@@ -72,15 +72,23 @@ base)
   error_ "Coudnot start backup on $RemoteHost. Error=${STDERR}"
   exit 1
  }
- _errc="$(${flTestOut+echo }rsync -a --exclude-from=${OurConfig%/*}/exclude.lst $User@$RemoteHost:${Dir2Copy%/}/ $OurDestPath 2>&1 >/dev/null)"
- (( $? )) && error_ "Some problem while RSYNC, description given: ${_errc}"
+ $( [[ $flTestOut ]] && echo 'cat -' || echo 'try' ) \
+ <<<"rsync -a --exclude-from=${OurConfig%/*}/exclude.lst ${User}@${RemoteHost}:${Dir2Copy%/}/ ${OurDestPath%/}" || {
+  error_ "Copy postgresql data directory (${Dir2Copy%/}) from $RemoteHost failed with: \"$STDERR\""
+  flCopyDataFailed=1
+ } 
  pg_backup stop || {
   error_ "Some problem occured while stopping backup on $RemoteHost. Error=${STDERR}"
   exit 1
  }
+# if [[ $flCopyDataFailed ]]; then
+#  ${flTestOut+echo }rm -rf "$OurDestPath"
+#  exit 1
+# fi
  trap "" SIGINT SIGTERM SIGHUP
  eval "LoginAs=\${INI$RemoteHost[login_to_server]-$(whoami)}"
  if [[ $flReplicaMode ]]; then
+  info_ 'Creating recovery.conf for replication'
   eval "cat <<EOF ${flTestOut->$OurDestPath/recovery.conf}
 standby_mode = 'on'
 trigger_file = '/tmp/postgresql.trigger.5432'
@@ -89,6 +97,7 @@ archive_cleanup_command = '${INIserver[archive_cleanup_command]-/opt/PostgreSQL/
 EOF
 "
  else
+  info_ 'Creating recovery.conf for backup restoration only'
   eval "cat <<EOF ${flTestOut->$OurDestPath/recovery.conf}
 restore_command = 'scp ${LoginAs}@${INIserver[hostname]}:${INIserver[backup_path]}/$RemoteHost/wals/%f %p'
 EOF
