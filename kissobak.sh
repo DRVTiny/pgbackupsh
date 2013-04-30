@@ -1,4 +1,24 @@
 #!/bin/bash
+doShowUsage () {
+cat <<EOF
+kissobak is a very simple and straightforward PostgreSQL backup utility following the classical KISS principles
+(C) by DRVTiny, 2013
+Usage: ${slf[NAME]} options command
+
+Where "options" can be one of:
+[-x] For debug mode
+[-T] For test-only mode (works only with command=base)
+[-R] To create recovery.conf apropriate for creating hot-standby (instead of usual recovery.conf for simple restore)
+[-d (FATAL|ERROR|WARN|INFO|DEBUG)] Specify debug level to write log with 
+[-l logfile] Specify path to logfile
+And "command" may be the one of:
+                  base HOSTNAME
+                  save_xlog FILE
+                  rotate HOSTNAME [tail]
+EOF
+ return 0
+}
+
 (( ${BASH_VERSION%%.*}>=4 )) || {
  echo 'Must be run under BASH version 4 or higher!' >&2
  exit 1
@@ -13,15 +33,17 @@ declare -A slf=(
 	[REAL_NAME]=${me##*/}
 )
 
+(( $# )) || { doShowUsage; exit 0; }
 DEBUG_LEVEL=info
 LOG_FILE='/var/log/postgresql/backup.log'
-while getopts 'TxR d: l:' k; do
+while getopts 'TxRh d: l:' k; do
  case $k in
   T) flTestOut='| cat -' ;;
   x) set -x 		 ;;
   R) flReplicaMode=1 	 ;;
   d) DEBUG_LEVEL="$OPTARG" ;;
   l) LOG_FILE="$OPTARG"  ;;
+  h) doShowUsage; exit 0 ;;
   *) : 			 ;;
  esac
 done
@@ -73,7 +95,7 @@ base)
   exit 1
  }
  $( [[ $flTestOut ]] && echo 'cat -' || echo 'try' ) \
- <<<"rsync -a --exclude-from=${OurConfig%/*}/exclude.lst ${User}@${RemoteHost}:${Dir2Copy%/}/ ${OurDestPath%/}" || {
+<<<"rsync -a --exclude-from=${OurConfig%/*}/exclude.lst ${User}@${RemoteHost}:${Dir2Copy%/}/ ${OurDestPath%/}" || {
   error_ "Copy postgresql data directory (${Dir2Copy%/}) from $RemoteHost failed with: \"$STDERR\""
   flCopyDataFailed=1
  } 
@@ -115,29 +137,41 @@ save_xlog)
 ;;
 rotate)
  RemoteHost="$2"
- eval "nBaseBaks2Keep=\${INI$RemoteHost[n_base_backups]:-2}"
- lstBaseBackups=($(ls "${INIserver[backup_path]}/$RemoteHost/base" | sed -nr '/^[0-9]{8}_[0-9]{6}$/p' | sort -rn))
- if (( ${#lstBaseBackups[@]}>nBaseBaks2Keep )); then
-  errc=0
-  for ((i=nBaseBaks2Keep; i<${#lstBaseBackups[@]}; i++)); do
-   bb=${lstBaseBackups[$i]}
-   doCleanWALs "${INIserver[backup_path]}/$RemoteHost/base/$bb/backup_label" -n &>/dev/null
-   (( errc+=$? ))
-  done
-  (( errc )) || {
-   pushd "$(pwd)" &>/dev/null
-   cd "${INIserver[backup_path]}/$RemoteHost/base"
-   rm -rf ${lstBaseBackups[@]:$nBaseBaks2Keep}
-   popd &>/dev/null
-   doCleanWALs "${INIserver[backup_path]}/$RemoteHost/base/${lstBaseBackups[$((nBaseBaks2Keep-1))]}/backup_label" 2>/dev/null
-  }
- fi
-# $0 tail_clean
-;;
-tail_clean)
- RemoteHost="$2"
- bb=$(ls "${INIserver[backup_path]}/$RemoteHost/base" | sed -nr '/^[0-9]{8}_[0-9]{6}$/p' | sort -n | head -1)
- [[ $bb ]] && doCleanWALs "${INIserver[backup_path]}/$RemoteHost/base/$bb/backup_label"
+ SubCmd="$3"
+ 
+ pthHostBaseBaks="${INIserver[backup_path]}/$RemoteHost/base"
+ [[ -d $pthHostBaseBaks ]] || {
+  error_ "No directory with base backups for host $RemoteHost found: seems, that you never do backups from this one"
+  exit 114
+ }
+ lstBaseBackups=( $(list_bb_in_dir "$pthHostBaseBaks") )
+ (( ${#lstBaseBackups[@]} )) || {
+  error_ "No base backups found in ${pthHostBaseBaks}, maybe you removed them all or it was created inproperly"
+  exit 114
+ }
+ case $SubCmd in
+ tail*)
+  doCleanWALs "${pthHostBaseBaks}/${lstBaseBackups[@]:${#lstBaseBackups[@]}-1}/backup_label"
+ ;;
+ *)
+  eval "nBaseBaks2Keep=\${INI$RemoteHost[n_base_backups]:-2}"
+  if (( ${#lstBaseBackups[@]}>nBaseBaks2Keep )); then
+   errc=0
+   for ((i=nBaseBaks2Keep; i<${#lstBaseBackups[@]}; i++)); do
+    bb=${lstBaseBackups[$i]}
+    doCleanWALs "$pthHostBaseBaks/$bb/backup_label" -n &>/dev/null
+    (( errc+=$? ))
+   done
+   (( errc )) || {
+    pushd "$(pwd)" &>/dev/null
+    cd "$pthHostBaseBaks"
+    rm -rf ${lstBaseBackups[@]:$nBaseBaks2Keep}
+    popd &>/dev/null
+    doCleanWALs "${pthHostBaseBaks}/${lstBaseBackups[$((nBaseBaks2Keep-1))]}/backup_label" 2>/dev/null
+   }
+  fi
+ ;;
+ esac
 ;;
 *)
  info_ "Sorry, operation \"$WHAT2DO\" N.I.Y"
