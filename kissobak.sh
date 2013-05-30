@@ -1,4 +1,6 @@
 #!/bin/bash
+shopt -s extglob; set +H
+
 doShowUsage () {
 cat <<EOF
 kissobak is a very simple and straightforward PostgreSQL backup utility following the classical KISS principles
@@ -37,13 +39,14 @@ declare -A slf=(
 DEBUG_LEVEL=info
 LOG_FILE='/var/log/postgresql/backup.log'
 PID_FILE='/var/run/kissobak/pidfile'
-while getopts 'TxRh d: l:' k; do
+while getopts 'TxRh d: l: p:' k; do
  case $k in
   T) flTestOut='| cat -' ;;
   x) set -x 		 ;;
   R) flReplicaMode=1 	 ;;
   d) DEBUG_LEVEL="$OPTARG" ;;
   l) LOG_FILE="$OPTARG"  ;;
+  p) PID_FILE="$OPTARG"  ;;
   h) doShowUsage; exit 0 ;;
   *) : 			 ;;
  esac
@@ -52,10 +55,11 @@ shift $((OPTIND-1))
 WHAT2DO=${1:-base}
 
 source /opt/scripts/functions/config.func
-{ source /opt/scripts/functions/debug.func && \
-  log_open "$LOG_FILE"; } || \
-   { echo "${slf[NAME]}: FATAL: No debug - no live!" >&2; exit 1; }
-
+source /opt/scripts/functions/debug.func || \
+ { echo "${slf[NAME]}: FATAL: No debug - no live!" >&2; exit 1; }
+log_open "$LOG_FILE" || \
+ error_ "Cant open log file $LOG_FILE, we have to write to STDERR"
+ 
 # Search for our wonderful config file in simplest ini format
 for OurConfig in {$HOME/.kissobak,/etc/kissobak}/config.ini; do
  [[ -f $OurConfig && -r $OurConfig ]] && break
@@ -78,8 +82,8 @@ fi
  fatal_ "PID file exists and process ($(<$PID_FILE)) seems to be running"
  exit 151
 } || {
- rm -f "$PID_FILE"
- echo "$$" > $PID_FILE
+ [[ -f $PID_FILE ]] && debug_ "PID file $PID_FILE already exists, but no corresponding process running, so we are going to reuse it"
+ echo "$$" > $PID_FILE || { fatal_ 'Cant write to PID file for some (unknown) reason'; exit 152; }
 }
 
 case $WHAT2DO in
@@ -141,11 +145,21 @@ EOF
 save_xlog)
  walsFile="$2"
  [[ $walsFile && -f $walsFile && -r $walsFile ]] || \
- { error_ 'You must specify file to copy and it must be readable'; exit 1; }
- info_ "We requested to copy/save $walsFile to backup host ${INIserver[hostname]}"
+  { error_ 'You must specify file to copy and it must be readable'; exit 1; }
+ info_ "We requested to copy/save $walsFile to backup host ${INIserver[hostname]}" 
+ 
+ chkWalFile "$walsFile" || { fatal_ 'Stop processing'; exit 171; }
+ 
  eval "LoginAs=\${INI$HOSTNAME[login_to_server]}"
- ssh ${LoginAs=postgres}@${INIserver[hostname]} "mkdir -p ${INIserver[backup_path]}/$HOSTNAME/wals/"
- rsync -a "$walsFile" $LoginAs@${INIserver[hostname]}:${INIserver[backup_path]}/$HOSTNAME/wals/
+ 
+ if ! try <<EOF
+ ssh ${LoginAs=postgres}@${INIserver[hostname]} "mkdir -p ${INIserver[backup_path]}/$HOSTNAME/wals/" && \
+  rsync -a "$walsFile" $LoginAs@${INIserver[hostname]}:${INIserver[backup_path]}/$HOSTNAME/wals/
+EOF
+ then
+  fatal_ "Cant copy WAL fiie to remote location. STDERR=\"$STDERR\""
+  exit 161
+ fi
 ;;
 rotate)
  RemoteHost="$2"

@@ -24,3 +24,20 @@ list_bb_in_dir () {
    sort -rn
  return $?
 }
+
+chkWalFile () {
+local walFile="$1"
+local walID=${walFile##*/}
+ [[ $walID =~ \.backup$ ]] && \
+  debug_ "File $walFile seems to be backup label"
+ walID=${walID%%.*}
+ if ! [[ $walID =~ ^[0-9A-F]{24}$ ]]; then
+  error_ "walID='$walID' seems to be invalid (it must be ~ [0-9A-F]{24})!"
+ elif [[ $walFile =~ \.backup$ && ! $(head -c18 "$walFile") == 'START WAL LOCATION' ]]; then
+  error_ "File $walFile seems to be backup label, but it's format is invalid"
+  return 1
+ elif ! [[ $(head -c4 "$walFile" | hexdump | head -1 | cut -d' ' -f2- | tr -d ' ') == 'd0710007' ]]; then
+  error_ "File $walFile seems to be invalid, because it contains wrong signature"
+ fi
+ return 0
+}
