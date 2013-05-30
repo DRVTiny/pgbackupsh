@@ -36,6 +36,7 @@ declare -A slf=(
 (( $# )) || { doShowUsage; exit 0; }
 DEBUG_LEVEL=info
 LOG_FILE='/var/log/postgresql/backup.log'
+PID_FILE='/var/run/kissobak/pidfile'
 while getopts 'TxRh d: l:' k; do
  case $k in
   T) flTestOut='| cat -' ;;
@@ -73,8 +74,16 @@ fi
 
 { source "${slf[REAL]%.*}.inc" || source "${0%.*}.inc"; }  || fatal_ 'Cant find my include file containing important functions'
 
+[[ -f $PID_FILE && -f /proc/$(<$PID_FILE)/cmdline ]] && {
+ fatal_ "PID file exists and process ($(<$PID_FILE)) seems to be running"
+ exit 151
+} || {
+ rm -f "$PID_FILE"
+ echo "$$" > $PID_FILE
+}
+
 case $WHAT2DO in
-base) 
+base)
  [[ $2 ]] || { error_ 'We dont know, from where and what to copy'; exit 1; }
  info_ 'Starting base backup...'
  if [[ $2 =~ \@ ]]; then 
@@ -87,8 +96,11 @@ base)
  TS="$(date +%Y%m%d_%H%M%S)"
  info_ "We was requested to get base copy from $RemoteHost, BackupID: $TS"
  OurDestPath="${INIserver[backup_path]}/$RemoteHost/base/$TS"
- ${flTestOut+echo }mkdir -p "$OurDestPath"
- info_ "We was requested to get base copy from $RemoteHost, $Dir2Copy. We are going to place this copy in $OurDestPath"
+ info_ "We was requested to get base copy from $RemoteHost, $Dir2Copy. We are going to place this copy in $OurDestPath" 
+ ${flTestOut+echo }mkdir -p "$OurDestPath" || {
+  error_ 'Problem detected while accessing backup directory'
+  exit 1
+ }
  trap 'pg_backup stop' SIGINT SIGTERM SIGHUP
  pg_backup start || {
   error_ "Coudnot start backup on $RemoteHost. Error=${STDERR}"
@@ -177,3 +189,4 @@ rotate)
  info_ "Sorry, operation \"$WHAT2DO\" N.I.Y"
 ;;
 esac
+rm -f $PID_FILE
