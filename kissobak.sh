@@ -125,6 +125,8 @@ base)
 # fi
  trap "" SIGINT SIGTERM SIGHUP
  eval "LoginAs=\${INI$RemoteHost[login_to_server]-$(whoami)}"
+ debug_ "Now let's create empty pg_xlog subdirectory inside base backup (because it must exist in time of restoration)"
+ mkdir "$OurDestPath/pg_xlog"
  if [[ $flReplicaMode ]]; then
   info_ 'Creating recovery.conf for replication'
   eval "cat <<EOF ${flTestOut->$OurDestPath/recovery.conf}
