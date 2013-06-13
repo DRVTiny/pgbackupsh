@@ -76,7 +76,8 @@ if [[ -d ${OurConfig%/*}/clients ]]; then
  done < <(find ${OurConfig%/*}/clients -type f -name '*.ini')
 fi
 
-{ source "${slf[REAL]%.*}.inc" || source "${0%.*}.inc"; }  || fatal_ 'Cant find my include file containing important functions'
+{ source "${slf[REAL]%.*}.inc" || source "${0%.*}.inc"; }  || \
+ fatal_ 'Cant find my include file containing important functions'
 
 [[ -f $PID_FILE && -f /proc/$(<$PID_FILE)/cmdline ]] && {
  fatal_ "PID file exists and process ($(<$PID_FILE)) seems to be running"
@@ -86,6 +87,7 @@ fi
  echo "$$" > $PID_FILE || { fatal_ 'Cant write to PID file for some (unknown) reason'; exit 152; }
 }
 
+cmdArchiveCleanup="${INIserver[archive_cleanup_command]-/opt/PostgreSQL/current/bin/pg_archivecleanup}"
 case $WHAT2DO in
 base)
  [[ $2 ]] || { error_ 'We dont know, from where and what to copy'; exit 1; }
@@ -125,27 +127,27 @@ base)
 # fi
  trap "" SIGINT SIGTERM SIGHUP
  eval "LoginAs=\${INI$RemoteHost[login_to_server]-$(whoami)}"
+ debug_ "Now let's create empty pg_xlog subdirectory inside base backup (because it must exist in time of restoration)"
+ mkdir "$OurDestPath/pg_xlog"
+ SSHConnPar="${LoginAs}@${INIserver[hostname]}"
+ WALsHere="${INIserver[backup_path]}/$RemoteHost/wals"
+ [[ $flTestOut ]] || exec 3<&1 1>"$OurDestPath/recovery.conf"
+ cat <<EOF
+restore_command = 'scp ${SSHConnPar}:${WALsHere}/%f %p'
+archive_cleanup_command = 'ssh $SSHConnPar $cmdArchiveCleanup "$WALsHere" %r' 
+EOF
  if [[ $flReplicaMode ]]; then
-  info_ 'Creating recovery.conf for replication'
-  eval "cat <<EOF ${flTestOut->$OurDestPath/recovery.conf}
+  cat <<EOF
 standby_mode = 'on'
 trigger_file = '/tmp/postgresql.trigger.5432'
-restore_command = 'scp ${LoginAs}@${INIserver[hostname]}:${INIserver[backup_path]}/$RemoteHost/wals/%f %p'
-archive_cleanup_command = '${INIserver[archive_cleanup_command]-/opt/PostgreSQL/current/bin/pg_archivecleanup} ${INIserver[backup_path]}/$RemoteHost/wals %r'
 EOF
-"
- else
-  info_ 'Creating recovery.conf for backup restoration only'
-  eval "cat <<EOF ${flTestOut->$OurDestPath/recovery.conf}
-restore_command = 'scp ${LoginAs}@${INIserver[hostname]}:${INIserver[backup_path]}/$RemoteHost/wals/%f %p'
-EOF
-"   
  fi
+ [[ $flTestOut ]] || exec 1<&3
 ;;
 save_xlog)
  walsFile="$2"
  [[ $walsFile && -f $walsFile && -r $walsFile ]] || \
-  { error_ 'You must specify file to copy and it must be readable'; exit 1; }
+  { error_ 'You must specify file to copy, it must exists and it must be readable'; exit 1; }
  info_ "We requested to copy/save $walsFile to backup host ${INIserver[hostname]}" 
  
  chkWalFile "$walsFile" || { fatal_ 'Stop processing'; exit 171; }
