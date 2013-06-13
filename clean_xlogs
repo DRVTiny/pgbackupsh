@@ -1,0 +1,8 @@
+#!/bin/bash
+[[ $PGDATA || ( $1 && -d $1 && -r $1 && -x $1 ) ]] || {
+ echo 'You must set PGDATA environment variable or pass argument to me to specify PostgreSQL data directory' >&2
+}
+
+export PGDATA=${PGDATA:-$1}
+eval $(pg_controldata | sed -nr 's%^.+(Next[XO]ID):\s*([0-9/]+)$%\1=\2%p')
+pg_resetxlog -o $NextOID -x ${NextXID##*/} -f $PGDATA
