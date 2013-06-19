@@ -85,6 +85,7 @@ fi
 } || {
  [[ -f $PID_FILE ]] && debug_ "PID file $PID_FILE already exists, but no corresponding process running, so we are going to reuse it"
  echo "$$" > $PID_FILE || { fatal_ 'Cant write to PID file for some (unknown) reason'; exit 152; }
+ trap "rm -f $PID_FILE" EXIT
 }
 
 cmdArchiveCleanup="${INIserver[archive_cleanup_command]-/opt/PostgreSQL/current/bin/pg_archivecleanup}"
