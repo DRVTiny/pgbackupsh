@@ -61,10 +61,10 @@ log_open "$LOG_FILE" || \
  error_ "Cant open log file $LOG_FILE, we have to write to STDERR"
  
 # Search for our wonderful config file in simplest ini format
-for OurConfig in {$HOME/.kissobak,/etc/kissobak}/config.ini; do
- [[ -f $OurConfig && -r $OurConfig ]] && break
+for OurConfig in {${USER_HOME:=$(getent passwd $(whoami) | cut -d: -f6)}/.kissobak,/etc/kissobak}/config.ini; do
+ [[ -e $OurConfig && -r $OurConfig ]] && break
 done
-[[ -f $OurConfig && -r $OurConfig ]] || { error_ 'Ooops... Config file not found'; exit 1; }
+[[ -e $OurConfig && -r $OurConfig ]] || { error_ 'Ooops... Config file not found'; exit 1; }
 # ...and read them
 eval "$(read_ini $OurConfig)"
 if [[ -d ${OurConfig%/*}/clients ]]; then
@@ -85,6 +85,7 @@ fi
 } || {
  [[ -f $PID_FILE ]] && debug_ "PID file $PID_FILE already exists, but no corresponding process running, so we are going to reuse it"
  echo "$$" > $PID_FILE || { fatal_ 'Cant write to PID file for some (unknown) reason'; exit 152; }
+ trap "rm -f $PID_FILE" EXIT
 }
 
 cmdArchiveCleanup="${INIserver[archive_cleanup_command]-/opt/PostgreSQL/current/bin/pg_archivecleanup}"
@@ -146,7 +147,7 @@ EOF
 ;;
 save_xlog)
  walsFile="$2"
- [[ $walsFile && -f $walsFile && -r $walsFile ]] || \
+ [[ $walsFile && -e $walsFile && -r $walsFile ]] || \
   { error_ 'You must specify file to copy, it must exists and it must be readable'; exit 1; }
  info_ "We requested to copy/save $walsFile to backup host ${INIserver[hostname]}" 
  
@@ -205,4 +206,3 @@ rotate)
  info_ "Sorry, operation \"$WHAT2DO\" N.I.Y"
 ;;
 esac
-rm -f $PID_FILE
