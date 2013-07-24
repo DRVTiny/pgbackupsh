@@ -179,7 +179,7 @@ rotate)
  }
  case $SubCmd in
  tail*)
-  doCleanWALs "${pthHostBaseBaks}/${lstBaseBackups[@]:${#lstBaseBackups[@]}-1}/backup_label"
+  doCleanWALs "${pthHostBaseBaks}/${lstBaseBackups[0]}"
  ;;
  *)
   eval "nBaseBaks2Keep=\${INI$RemoteHost[n_base_backups]:-2}"
@@ -187,16 +187,16 @@ rotate)
    errc=0
    for ((i=nBaseBaks2Keep; i<${#lstBaseBackups[@]}; i++)); do
     bb=${lstBaseBackups[$i]}
-    doCleanWALs "$pthHostBaseBaks/$bb/backup_label" -n &>/dev/null
+    doCleanWALs "$pthHostBaseBaks/$bb" -n &>/dev/null
     (( errc+=$? ))
    done
-   (( errc )) || {
+#   (( errc )) || {
     pushd "$(pwd)" &>/dev/null
     cd "$pthHostBaseBaks"
     rm -rf ${lstBaseBackups[@]:$nBaseBaks2Keep}
     popd &>/dev/null
-    doCleanWALs "${pthHostBaseBaks}/${lstBaseBackups[$((nBaseBaks2Keep-1))]}/backup_label" 2>/dev/null
-   }
+    doCleanWALs "${pthHostBaseBaks}/${lstBaseBackups[$((nBaseBaks2Keep-1))]}" 2>/dev/null
+#   }
   fi
  ;;
  esac
