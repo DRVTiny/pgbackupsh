@@ -48,13 +48,15 @@ local STD_SIGN5='d0710007'
  walID=${walID%%.*}
  if ! [[ $walID =~ ^[0-9A-F]{24}$ ]]; then
   error_ "walID='$walID' seems to be invalid (it must be ~ [0-9A-F]{24})!"
- elif [[ $walFile =~ \.backup$ && ! $(head -c18 "$walFile") == 'START WAL LOCATION' ]]; then
-  error_ "File $walFile seems to be backup label, but it's format is invalid"
-  return 1
- else
-  sign5=$(head -c4 "$walFile" | hexdump | head -1 | cut -d' ' -f2- | tr -d ' ')
-  [[ $sign5 == $STD_SIGN5 ]] || \
-   warn_ "File $walFile may be (but may be not) invalid, because it contain signature '$sign5' instead of expected '$STD_SIGN5'"
+ elif [[ $walFile =~ \.backup$ ]]; then
+  [[ $(head -c18 "$walFile") == 'START WAL LOCATION' ]] || {
+   error_ "File $walFile seems to be backup label, but it's format is invalid"
+   return 1
+  }
+ else 
+  sign5=$(head -c2 "$walFile" | hexdump | head -1 | cut -d' ' -f2- | tr -d ' ')
+  [[ $sign5 == ${STD_SIGN5:0:4} ]] || \
+   warn_ "File $walFile may be (but may be not) invalid, because it contain signature '$sign5' instead of expected '${STD_SIGN5:0:4}'"
  fi
  return 0
 }
