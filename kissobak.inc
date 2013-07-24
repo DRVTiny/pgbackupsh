@@ -1,7 +1,20 @@
 doCleanWALs () {
- local pthBackupLabel="$1"; shift
- local pthWALstorage="$(dirname $pthBackupLabel)/../../wals" idStartWAL
- [[ -d $pthWALstorage ]] || return 1
+ local pthBaseBackup="${1%/}"; shift
+ local pthWALstorage="$pthBaseBackup/../../wals"
+ local pthBackupLabel idStartWAL
+ local d
+
+ [[ -d $pthBaseBackup ]] || return 1
+ [[ -d $pthWALstorage ]] || return 2
+
+ for d in $pthBaseBackup{,/main}; do
+  [[ -f $d/backup_label && $(stat -c %s $d/backup_label) -gt 0 ]] && {
+   pthBackupLabel="$d/backup_label"
+   break
+  }
+ done
+ [[ $pthBackupLabel ]] || return 3
+ 
  idStartWAL=$(sed -nr 's%^.+\(file\s([0-9A-F]+)\)\s*$%\1%p' "$pthBackupLabel" 2>/dev/null) && \
   [[ $idStartWAL && -f $pthWALstorage/$idStartWAL ]] && \
    ${INIserver[archive_cleanup_command]-/opt/PostgreSQL/current/bin/pg_archivecleanup} $@ "$pthWALstorage" $idStartWAL
@@ -19,7 +32,7 @@ EOF
 
 list_bb_in_dir () {
  local dir="$1"
- find "$dir" -type d -regextype posix-extended  -regex '.*/[0-9]{8}_[0-9]{6}' -exec test -f {}/backup_label \; -print | \
+ find "$dir" -type d -regextype posix-extended  -regex '.*/[0-9]{8}_[0-9]{6}' -exec test -f {}/backup_label -o -f {}/main/backup_label \; -print | \
   sed "s%^${dir}/%%" | \
    sort -rn
  return $?
