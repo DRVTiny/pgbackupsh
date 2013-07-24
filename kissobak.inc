@@ -28,6 +28,8 @@ list_bb_in_dir () {
 chkWalFile () {
 local walFile="$1"
 local walID=${walFile##*/}
+local sign5
+local STD_SIGN5='d0710007'
  [[ $walID =~ \.backup$ ]] && \
   debug_ "File $walFile seems to be backup label"
  walID=${walID%%.*}
@@ -36,8 +38,10 @@ local walID=${walFile##*/}
  elif [[ $walFile =~ \.backup$ && ! $(head -c18 "$walFile") == 'START WAL LOCATION' ]]; then
   error_ "File $walFile seems to be backup label, but it's format is invalid"
   return 1
- elif ! [[ $(head -c4 "$walFile" | hexdump | head -1 | cut -d' ' -f2- | tr -d ' ') == 'd0710007' ]]; then
-  error_ "File $walFile seems to be invalid, because it contains wrong signature"
+ else
+  sign5=$(head -c4 "$walFile" | hexdump | head -1 | cut -d' ' -f2- | tr -d ' ')
+  [[ $sign5 == $STD_SIGN5 ]] || \
+   warn_ "File $walFile may be (but may be not) invalid, because it contain signature '$sign5' instead of expected '$STD_SIGN5'"
  fi
  return 0
 }
