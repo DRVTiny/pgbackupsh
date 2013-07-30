@@ -21,6 +21,13 @@ EOF
  return 0
 }
 
+declare -a lstFiles2Clean
+cleanOnExit () {
+ (( ${#lstFiles2Clean[@]} )) && rm -f ${lstFiles2Clean[@]}
+ return $?
+}
+trap cleanOnExit EXIT
+
 (( ${BASH_VERSION%%.*}>=4 )) || {
  echo 'Must be run under BASH version 4 or higher!' >&2
  exit 1
@@ -84,8 +91,8 @@ fi
  exit 151
 } || {
  [[ -f $PID_FILE ]] && debug_ "PID file $PID_FILE already exists, but no corresponding process running, so we are going to reuse it"
- echo "$$" > $PID_FILE || { fatal_ 'Cant write to PID file for some (unknown) reason'; exit 152; }
- trap "rm -f $PID_FILE" EXIT
+ echo "$$" > $PID_FILE || { fatal_ 'Cant write to PID file for some (unknown) reason. Maybe SELinux is a shit that break things?'; exit 152; }
+ lstFiles2Clean+=($PID_FILE)
 }
 
 cmdArchiveCleanup="${INIserver[archive_cleanup_command]-/opt/PostgreSQL/current/bin/pg_archivecleanup}"
@@ -146,22 +153,62 @@ EOF
  [[ $flTestOut ]] || exec 1<&3
 ;;
 save_xlog)
- walsFile="$2"
- [[ $walsFile && -e $walsFile && -r $walsFile ]] || \
+ walsPath="$2"
+ [[ $walsPath && -e $walsPath && -r $walsPath ]] || \
   { error_ 'You must specify file to copy, it must exists and it must be readable'; exit 1; }
- info_ "We requested to copy/save $walsFile to backup host ${INIserver[hostname]}" 
+ walsName=${walsPath##*/}
+ info_ "We requested to copy/save $walsPath to backup host ${INIserver[hostname]}" 
  
- chkWalFile "$walsFile" || { fatal_ 'Stop processing'; exit 171; }
+ chkWalFile "$walsPath" || { fatal_ 'Stop processing'; exit 171; }
+
+ if eval [[ \${INI$HOSTNAME[compress_xlog]}\${INI$HOSTNAME[compress_xlogs]} ]]; then
+  tmpFile=$(mktemp /tmp/XXXXXXXXXXXXXXXXXXXXXXX)
+  lstFiles2Clean+=($tmpFile)
+  bzip2 --best -c "$walsPath" > $tmpFile
+  walsPath="$tmpFile"
+ fi 
  
- eval "LoginAs=\${INI$HOSTNAME[login_to_server]}"
- 
+ eval "LoginAs=\${INI$HOSTNAME[login_to_server]}" 
  if ! try <<EOF
  ssh ${LoginAs=postgres}@${INIserver[hostname]} "mkdir -p ${INIserver[backup_path]}/$HOSTNAME/wals/" && \
-  rsync -a "$walsFile" $LoginAs@${INIserver[hostname]}:${INIserver[backup_path]}/$HOSTNAME/wals/
+  rsync -a "$walsPath" $LoginAs@${INIserver[hostname]}:${INIserver[backup_path]}/$HOSTNAME/wals/$walsName
 EOF
  then
-  fatal_ "Cant copy WAL fiie to remote location. STDERR=\"$STDERR\""
+  fatal_ "Cant copy WAL file to remote location. STDERR=\"$STDERR\""
   exit 161
+ fi
+;;
+restore_xlog)
+ srcFile="${2##*/}"
+ dstPath="${3%/}"
+ [[ -d $dstPath ]] && dstPath+="/$srcFile"
+ 
+ eval "LoginAs=\${INI$HOSTNAME[login_to_server]}" 
+ if ! try <<EOF
+ scp "$LoginAs@${INIserver[hostname]}:${INIserver[backup_path]}/$HOSTNAME/wals/$srcFile" "$dstPath"
+EOF
+ then
+  fatal_ "Cant get wal file $srcFile from backup server ${INIserver[hostname]}. STDERR='$STDERR'"
+  exit 261
+ fi
+ 
+ zipCmd=$(file "$dstPath" 2>&1 | sed -nr 's%^[^ ]*: %%; s% compressed data.*$%%p')
+ if [[ $zipCmd ]]; then
+  tmpFile=$(mktemp /tmp/XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX)
+  lstFiles2Clean+=($tmpFile)
+  
+  if ! try <<EOF
+$zipCmd -cd "$dstPath" > $tmpFile
+EOF
+  then
+   mv $tmpFile "$dstPath"
+  else
+   rm -f "$dstPath"
+   fatal_ "Cant unpack file '$dstPath' with '$zipCmd' archiver, maybe it is damaged. STDERR='$STDERR'"
+   exit 262
+  fi
+ else
+  info_ "File '$dstPath' is not compressed"
  fi
 ;;
 rotate)
