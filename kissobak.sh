@@ -13,20 +13,30 @@ Where "options" can be one of:
 [-R] To create recovery.conf apropriate for creating hot-standby (instead of usual recovery.conf for simple restore)
 [-d (FATAL|ERROR|WARN|INFO|DEBUG)] Specify debug level to write log with 
 [-l logfile] Specify path to logfile
+[-h] To show this useful message :)
 And "command" may be the one of:
-                  base HOSTNAME
-                  save_xlog FILE
-                  rotate HOSTNAME [tail]
+ Executive commands:
+(server)          base CLIENT_HOSTNAME
+Create "base" backup for clientID=CLIENT_HOSTNAME
+                  
+(client)          save_xlog WAL_FULL_PATH
+Send wal segment file from client to server (with optional compression), it must be used as archive_command in postgresql.conf
+                  
+(client)          restore_xlog WAL_ID
+Get wal segment file from server in time of recovery|replication
+              
+(server)          rotate CLIENT_HOSTNAME [tail]
+Remove old base backups and appropriate wal segments
+
+ Informational commands:
+(server)          ls [CLIENT_HOSTNAME]
+Print the list of base backups available for clientID=CLIENT_HOSTNAME or for all clients
+
+(server)          df
+Get information about free disc space on mount point used for backups
 EOF
  return 0
 }
-
-declare -a lstFiles2Clean
-cleanOnExit () {
- (( ${#lstFiles2Clean[@]} )) && rm -f ${lstFiles2Clean[@]}
- return $?
-}
-trap cleanOnExit EXIT
 
 (( ${BASH_VERSION%%.*}>=4 )) || {
  echo 'Must be run under BASH version 4 or higher!' >&2
@@ -34,6 +44,7 @@ trap cleanOnExit EXIT
 }
 
 me=$(readlink -e "$0")
+source /opt/scripts/functions/prologue.inc
 declare -A slf=(
 	[NAME]=${0##*/}
 	[PATH]=${0%/*}
@@ -48,18 +59,22 @@ LOG_FILE='/var/log/postgresql/backup.log'
 PID_FILE='/var/run/kissobak/pidfile'
 while getopts 'TxRh d: l: p:' k; do
  case $k in
-  T) flTestOut='| cat -' ;;
-  x) set -x 		 ;;
-  R) flReplicaMode=1 	 ;;
-  d) DEBUG_LEVEL="$OPTARG" ;;
-  l) LOG_FILE="$OPTARG"  ;;
-  p) PID_FILE="$OPTARG"  ;;
-  h) doShowUsage; exit 0 ;;
-  *) : 			 ;;
+  T) flTestOut='| cat -' 	;;
+  x) set -x 		 	;;
+  R) flReplicaMode=1 	 	;;
+  d) DEBUG_LEVEL="$OPTARG" 	;;
+  l) LOG_FILE="$OPTARG"  	;;
+  p) PID_FILE="$OPTARG"  	;;
+  h)  doShowUsage; exit 0 	;;
+  \?) doShowUsage; exit 1 	;;
  esac
 done
 shift $((OPTIND-1))
-WHAT2DO=${1:-base}
+c=0
+while [[ $@ ]]; do
+ ARGV[$((c++))]="$1"
+ shift
+done
 
 source /opt/scripts/functions/config.func
 source /opt/scripts/functions/debug.func || \
@@ -83,173 +98,64 @@ if [[ -d ${OurConfig%/*}/clients ]]; then
  done < <(find ${OurConfig%/*}/clients -type f -name '*.ini')
 fi
 
+{ source "${slf[REAL]%.*}.erc" || source "${0%.*}.erc"; }  || \
+ { fatal_ 'Cant find my include file containing error codes description'; exit 151; }
+
 { source "${slf[REAL]%.*}.inc" || source "${0%.*}.inc"; }  || \
- fatal_ 'Cant find my include file containing important functions'
+ { fatal_ 'Cant find my include file containing important functions'; exit $ERC_INCLF_NOT_FOUND; }
 
-[[ -f $PID_FILE && -f /proc/$(<$PID_FILE)/cmdline ]] && {
- fatal_ "PID file exists and process ($(<$PID_FILE)) seems to be running"
- exit 151
-} || {
- [[ -f $PID_FILE ]] && debug_ "PID file $PID_FILE already exists, but no corresponding process running, so we are going to reuse it"
- echo "$$" > $PID_FILE || { fatal_ 'Cant write to PID file for some (unknown) reason. Maybe SELinux is a shit that break things?'; exit 152; }
- lstFiles2Clean+=($PID_FILE)
-}
+declare -A Need2LockWhenDo=(
+ [base]=1
+ [ls]=0
+ [df]=0
+ [save_xlog]=0
+ [restore_xlog]=1
+ [rotate]=1
+)
 
+WHAT2DO=${ARGV[0]:-base}
+
+if (( Need2LockWhenDo[$WHAT2DO] )); then
+ [[ -f $PID_FILE && -f /proc/$(<$PID_FILE)/cmdline ]] && {
+  fatal_ "PID file exists and process ($(<$PID_FILE)) seems to be running"
+  exit $ERC_OP_LOCKED
+ } || {
+  [[ -f $PID_FILE ]] && debug_ "PID file $PID_FILE already exists, but no corresponding process running, so we are going to reuse it"
+  echo "$$" > $PID_FILE || {
+   fatal_ 'Cant write to PID file for some (unknown) reason. Maybe SELinux is a shit that break things?'
+   exit $ERC_PID_CANT_BE_CREATED   
+  }
+  lstFiles2Clean+=($PID_FILE)
+ }
+fi
 cmdArchiveCleanup="${INIserver[archive_cleanup_command]-/opt/PostgreSQL/current/bin/pg_archivecleanup}"
+cmdTAR=${INIserver[tar_command]:-$(which tar 2>/dev/null || whereis tar | cut -d' ' -f2)}
 case $WHAT2DO in
 base)
- [[ $2 ]] || { error_ 'We dont know, from where and what to copy'; exit 1; }
- info_ 'Starting base backup...'
- if [[ $2 =~ \@ ]]; then 
-  IFS='@:' read User RemoteHost Dir2Copy <<<"$2"
+ doBaseBackup ${ARGV[1]} ;;
+ls)
+ if [[ ${ARGV[1]} ]]; then
+  i=0 
+  while (( ${#ARGV[$((++i))]} )); do
+   echo "Base backups for clientID: '${ARGV[$i]}'"
+   list_bb_in_dir "${INIserver[backup_path]}/${ARGV[$i]}/base" | nl
+  done
  else
-  RemoteHost="$2"
-  eval "User=\${INI$RemoteHost[login_from_server]}; Dir2Copy=\${INI$RemoteHost[pgdata]}; PSQL=\${INI$RemoteHost[psql]:-psql}"
+  while read -r d; do
+   echo "Base backups for clientID: '${d##*/}'"
+   list_bb_in_dir "$d/base" | nl
+  done < <(find "${INIserver[backup_path]}/" -maxdepth 1 -mindepth 1 -type d -exec test -d {}/base \; -print)
  fi
- debug_ "User=$User, Dir2Copy=$Dir2Copy, PSQL=$PSQL"
- TS="$(date +%Y%m%d_%H%M%S)"
- info_ "We was requested to get base copy from $RemoteHost, BackupID: $TS"
- OurDestPath="${INIserver[backup_path]}/$RemoteHost/base/$TS"
- info_ "We was requested to get base copy from $RemoteHost, $Dir2Copy. We are going to place this copy in $OurDestPath" 
- ${flTestOut+echo }mkdir -p "$OurDestPath" || {
-  error_ 'Problem detected while accessing backup directory'
-  exit 1
- }
- trap 'pg_backup stop' SIGINT SIGTERM SIGHUP
- pg_backup start || {
-  error_ "Coudnot start backup on $RemoteHost. Error=${STDERR}"
-  exit 1
- }
- $( [[ $flTestOut ]] && echo 'cat -' || echo 'try' ) \
-<<<"rsync -a --exclude-from=${OurConfig%/*}/exclude.lst ${User}@${RemoteHost}:${Dir2Copy%/}/ ${OurDestPath%/}" || {
-  error_ "Copy postgresql data directory (${Dir2Copy%/}) from $RemoteHost failed with: \"$STDERR\""
-  flCopyDataFailed=1
- } 
- pg_backup stop || {
-  error_ "Some problem occured while stopping backup on $RemoteHost. Error=${STDERR}"
-  exit 1
- }
-# if [[ $flCopyDataFailed ]]; then
-#  ${flTestOut+echo }rm -rf "$OurDestPath"
-#  exit 1
-# fi
- trap "" SIGINT SIGTERM SIGHUP
- eval "LoginAs=\${INI$RemoteHost[login_to_server]-$(whoami)}"
- debug_ "Now let's create empty pg_xlog subdirectory inside base backup (because it must exist in time of restoration)"
- mkdir "$OurDestPath/pg_xlog"
- SSHConnPar="${LoginAs}@${INIserver[hostname]}"
- WALsHere="${INIserver[backup_path]}/$RemoteHost/wals"
- [[ $flTestOut ]] || exec 3<&1 1>"$OurDestPath/recovery.conf"
- cat <<EOF
-restore_command = 'scp ${SSHConnPar}:${WALsHere}/%f %p'
-archive_cleanup_command = 'ssh $SSHConnPar $cmdArchiveCleanup "$WALsHere" %r' 
-EOF
- if [[ $flReplicaMode ]]; then
-  cat <<EOF
-standby_mode = 'on'
-trigger_file = '/tmp/postgresql.trigger.5432'
-EOF
- fi
- [[ $flTestOut ]] || exec 1<&3
+;;
+df)
+ df -h "${INIserver[backup_path]}"
 ;;
 save_xlog)
- walsPath="$2"
- [[ $walsPath && -e $walsPath && -r $walsPath ]] || \
-  { error_ 'You must specify file to copy, it must exists and it must be readable'; exit 1; }
- walsName=${walsPath##*/}
- info_ "We requested to copy/save $walsPath to backup host ${INIserver[hostname]}" 
- 
- chkWalFile "$walsPath" || { fatal_ 'Stop processing'; exit 171; }
-
- if eval [[ \${INI$HOSTNAME[compress_xlog]}\${INI$HOSTNAME[compress_xlogs]} ]]; then
-  tmpFile=$(mktemp /tmp/XXXXXXXXXXXXXXXXXXXXXXX)
-  lstFiles2Clean+=($tmpFile)
-  bzip2 --best -c "$walsPath" > $tmpFile
-  walsPath="$tmpFile"
- fi 
- 
- eval "LoginAs=\${INI$HOSTNAME[login_to_server]}" 
- if ! try <<EOF
- ssh ${LoginAs=postgres}@${INIserver[hostname]} "mkdir -p ${INIserver[backup_path]}/$HOSTNAME/wals/" && \
-  rsync -a "$walsPath" $LoginAs@${INIserver[hostname]}:${INIserver[backup_path]}/$HOSTNAME/wals/$walsName
-EOF
- then
-  fatal_ "Cant copy WAL file to remote location. STDERR=\"$STDERR\""
-  exit 161
- fi
-;;
+ doSaveWalSeg ${ARGV[1]} ;;
 restore_xlog)
- srcFile="${2##*/}"
- dstPath="${3%/}"
- [[ -d $dstPath ]] && dstPath+="/$srcFile"
- 
- eval "LoginAs=\${INI$HOSTNAME[login_to_server]}" 
- if ! try <<EOF
- scp "$LoginAs@${INIserver[hostname]}:${INIserver[backup_path]}/$HOSTNAME/wals/$srcFile" "$dstPath"
-EOF
- then
-  fatal_ "Cant get wal file $srcFile from backup server ${INIserver[hostname]}. STDERR='$STDERR'"
-  exit 261
- fi
- 
- zipCmd=$(file "$dstPath" 2>&1 | sed -nr 's%^[^ ]*: %%; s% compressed data.*$%%p')
- if [[ $zipCmd ]]; then
-  tmpFile=$(mktemp /tmp/XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX)
-  lstFiles2Clean+=($tmpFile)
-  
-  if ! try <<EOF
-$zipCmd -cd "$dstPath" > $tmpFile
-EOF
-  then
-   mv $tmpFile "$dstPath"
-  else
-   rm -f "$dstPath"
-   fatal_ "Cant unpack file '$dstPath' with '$zipCmd' archiver, maybe it is damaged. STDERR='$STDERR'"
-   exit 262
-  fi
- else
-  info_ "File '$dstPath' is not compressed"
- fi
-;;
+ doRestoreWalSeg ${ARGV[1]} ${ARGV[2]} ;;
 rotate)
- RemoteHost="$2"
- SubCmd="$3"
- 
- pthHostBaseBaks="${INIserver[backup_path]}/$RemoteHost/base"
- [[ -d $pthHostBaseBaks ]] || {
-  error_ "No directory with base backups for host $RemoteHost found: seems, that you never do backups from this one"
-  exit 114
- }
- lstBaseBackups=( $(list_bb_in_dir "$pthHostBaseBaks") )
- (( ${#lstBaseBackups[@]} )) || {
-  error_ "No base backups found in ${pthHostBaseBaks}, maybe you removed them all or it was created inproperly"
-  exit 114
- }
- case $SubCmd in
- tail*)
-  doCleanWALs "${pthHostBaseBaks}/${lstBaseBackups[0]}"
- ;;
- *)
-  eval "nBaseBaks2Keep=\${INI$RemoteHost[n_base_backups]:-2}"
-  if (( ${#lstBaseBackups[@]}>nBaseBaks2Keep )); then
-   errc=0
-   for ((i=nBaseBaks2Keep; i<${#lstBaseBackups[@]}; i++)); do
-    bb=${lstBaseBackups[$i]}
-    doCleanWALs "$pthHostBaseBaks/$bb" -n &>/dev/null
-    (( errc+=$? ))
-   done
-#   (( errc )) || {
-    pushd "$(pwd)" &>/dev/null
-    cd "$pthHostBaseBaks"
-    rm -rf ${lstBaseBackups[@]:$nBaseBaks2Keep}
-    popd &>/dev/null
-    doCleanWALs "${pthHostBaseBaks}/${lstBaseBackups[$((nBaseBaks2Keep-1))]}" 2>/dev/null
-#   }
-  fi
- ;;
- esac
-;;
+ doRotateBaseBaks ${ARGV[1]} ${ARGV[2]} ;;
 *)
- info_ "Sorry, operation \"$WHAT2DO\" N.I.Y"
-;;
+ info_ "Sorry, operation \"$WHAT2DO\" is not implemented yet" ;;
 esac
