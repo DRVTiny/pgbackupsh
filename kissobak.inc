@@ -38,7 +38,11 @@ doCleanWALs () {
     break
    }
   done
-  [[ $pthBackupLabel ]] || return 3
+  if ! [[ ! $pthBackupLabel && -f "${pthBaseBackup}.lbl" ]]; then
+   pthBackupLabel="${pthBaseBackup}.lbl"
+  else
+   return $ERC_NO_BACKUP_LABEL
+  fi
  elif [[ -f $pthBaseBackup ]]; then
   pthBackupLabel=${pthBaseBackup%%.+([^/])}
   TS=${pthBackupLabel##*/}
@@ -51,6 +55,7 @@ doCleanWALs () {
    done
    (( errc==2 )) && return $ERC_NO_BACKUP_LABEL  
    pthBackupLabel="/tmp/$f"
+   lstFiles2Clean+=("/tmp/$TS")
   fi
  fi
  idStartWAL=$(sed -nr 's%^.+\(file\s([0-9A-F]+)\)\s*$%\1%p' "$pthBackupLabel" 2>/dev/null) && \
